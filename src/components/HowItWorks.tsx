@@ -59,9 +59,19 @@ export default function HowItWorks() {
         </ul>
       </div>
 
-      <p className="text-center text-sm text-muted mt-10 pb-10">
+      <p className="text-center text-sm text-muted mt-10">
         Built for creators who value clean design.
       </p>
+
+      <div className="mt-8 pb-10 border-t border-border pt-6">
+        <p className="text-xs text-muted leading-relaxed text-center max-w-lg mx-auto">
+          Disclaimer: Carousel Studio is not responsible for wrong, inaccurate, or
+          misleading information in generated outputs. The suggested text
+          redistribution is algorithmic and may alter the meaning or context of your
+          original content. Always review and double-check all slides before publicly
+          posting.
+        </p>
+      </div>
     </section>
   );
 }

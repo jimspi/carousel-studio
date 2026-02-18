@@ -19,11 +19,12 @@ export async function downloadAllSlides(dataUrls: string[]) {
   }
 
   const blob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
+  link.href = url;
   link.download = 'carousel-studio-export.zip';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(link.href);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

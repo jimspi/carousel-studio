@@ -24,8 +24,8 @@ export async function renderSlide(
   // Draw image covering the canvas (object-cover behavior)
   drawCover(ctx, img, canvasWidth, canvasHeight);
 
-  // Draw gradient overlay on lower 45%
-  const gradientStart = canvasHeight * 0.55;
+  // Draw gradient overlay on lower 50% for enough text coverage
+  const gradientStart = canvasHeight * 0.50;
   const gradient = ctx.createLinearGradient(0, gradientStart, 0, canvasHeight);
   gradient.addColorStop(0, 'rgba(0,0,0,0)');
   gradient.addColorStop(0.3, 'rgba(0,0,0,0.15)');
@@ -50,7 +50,9 @@ export async function renderSlide(
     const { lines, finalFontSize } = wrapText(ctx, text, maxWidth, baseFontSize, maxLines);
     const lineHeight = finalFontSize * 1.4;
     const totalTextHeight = lines.length * lineHeight;
-    const startY = canvasHeight - bottomPadding - totalTextHeight;
+    // Clamp startY so text never renders above the gradient zone
+    const rawStartY = canvasHeight - bottomPadding - totalTextHeight;
+    const startY = Math.max(rawStartY, gradientStart + 20);
 
     ctx.font = `bold ${finalFontSize}px "Helvetica Neue", "Arial", sans-serif`;
     ctx.fillStyle = '#FFFFFF';
@@ -69,12 +71,16 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
-    img.onload = () => {
+    img.onload = async () => {
       URL.revokeObjectURL(url);
       // Resize if too large
       if (img.width > 4000 || img.height > 4000) {
-        const resized = resizeImage(img, 4000);
-        resolve(resized);
+        try {
+          const resized = await resizeImage(img, 4000);
+          resolve(resized);
+        } catch (err) {
+          reject(err);
+        }
       } else {
         resolve(img);
       }
@@ -87,16 +93,18 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-function resizeImage(img: HTMLImageElement, maxDim: number): HTMLImageElement {
-  const ratio = Math.min(maxDim / img.width, maxDim / img.height);
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width * ratio;
-  canvas.height = img.height * ratio;
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const resized = new Image();
-  resized.src = canvas.toDataURL();
-  return resized;
+function resizeImage(img: HTMLImageElement, maxDim: number): Promise<HTMLImageElement> {
+  return new Promise((resolve) => {
+    const ratio = Math.min(maxDim / img.width, maxDim / img.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width * ratio;
+    canvas.height = img.height * ratio;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const resized = new Image();
+    resized.onload = () => resolve(resized);
+    resized.src = canvas.toDataURL();
+  });
 }
 
 function drawCover(

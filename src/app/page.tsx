@@ -30,6 +30,8 @@ export default function Home() {
 
   const handleRemoveImage = useCallback((id: string) => {
     setImages((prev) => {
+      const toRemove = prev.find((img) => img.id === id);
+      if (toRemove) URL.revokeObjectURL(toRemove.previewUrl);
       const filtered = prev.filter((img) => img.id !== id);
       return filtered.map((img, i) => ({ ...img, order: i }));
     });
@@ -52,19 +54,23 @@ export default function Home() {
     const total = images.length;
     const generated: ProcessedSlide[] = [];
 
-    for (let i = 0; i < total; i++) {
-      setProgress({ current: i + 1, total });
-      const imageData = await renderSlide(images[i].file, textChunks[i], aspectRatio);
-      generated.push({
-        imageData,
-        slideNumber: i + 1,
-        textContent: textChunks[i],
-      });
+    try {
+      for (let i = 0; i < total; i++) {
+        setProgress({ current: i + 1, total });
+        const imageData = await renderSlide(images[i].file, textChunks[i], aspectRatio);
+        generated.push({
+          imageData,
+          slideNumber: i + 1,
+          textContent: textChunks[i],
+        });
+      }
+      setSlides(generated);
+    } catch (err) {
+      console.error('Slide generation failed:', err);
+    } finally {
+      setProcessing(false);
+      setProgress(null);
     }
-
-    setSlides(generated);
-    setProcessing(false);
-    setProgress(null);
   }, [images, text, aspectRatio]);
 
   const canGenerate = images.length > 0 && text.trim().length > 0;

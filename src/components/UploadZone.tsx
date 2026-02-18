@@ -50,7 +50,9 @@ export default function UploadZone({ images, onImagesAdded }: UploadZoneProps) {
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDragOver(false);
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false);
+    }
   };
 
   const handleClick = () => {

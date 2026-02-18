@@ -14,6 +14,12 @@ export default function CarouselPreview({ slides, onSlideChange }: CarouselPrevi
   const touchStartX = useRef(0);
   const touchEndX = useRef(0);
 
+  // Reset current when slides change
+  useEffect(() => {
+    setCurrent(0);
+    onSlideChange?.(0);
+  }, [slides, onSlideChange]);
+
   const goTo = useCallback(
     (idx: number) => {
       if (idx >= 0 && idx < slides.length) {
@@ -27,9 +33,11 @@ export default function CarouselPreview({ slides, onSlideChange }: CarouselPrevi
   const prev = useCallback(() => goTo(current - 1), [current, goTo]);
   const next = useCallback(() => goTo(current + 1), [current, goTo]);
 
-  // Keyboard navigation
+  // Keyboard navigation (skip when user is typing in an input/textarea)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.key === 'ArrowLeft') prev();
       if (e.key === 'ArrowRight') next();
     };
@@ -40,6 +48,7 @@ export default function CarouselPreview({ slides, onSlideChange }: CarouselPrevi
   // Touch swipe
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
+    touchEndX.current = e.touches[0].clientX;
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {

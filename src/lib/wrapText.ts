@@ -3,13 +3,15 @@ export function wrapText(
   text: string,
   maxWidth: number,
   fontSize: number,
-  maxLines: number
+  maxLines: number,
+  fontFamily: string = '"Helvetica Neue", "Arial", sans-serif',
+  fontWeight: number = 700
 ): { lines: string[]; finalFontSize: number } {
   let currentFontSize = fontSize;
   const minFontSize = 18;
 
   while (currentFontSize >= minFontSize) {
-    ctx.font = `bold ${currentFontSize}px "Helvetica Neue", "Arial", sans-serif`;
+    ctx.font = `${fontWeight} ${currentFontSize}px ${fontFamily}`;
     const lines = computeLines(ctx, text, maxWidth);
 
     if (lines.length <= maxLines) {
@@ -20,7 +22,7 @@ export function wrapText(
   }
 
   // At minimum font size, truncate to maxLines
-  ctx.font = `bold ${minFontSize}px "Helvetica Neue", "Arial", sans-serif`;
+  ctx.font = `${fontWeight} ${minFontSize}px ${fontFamily}`;
   const lines = computeLines(ctx, text, maxWidth);
   return { lines: lines.slice(0, maxLines), finalFontSize: minFontSize };
 }

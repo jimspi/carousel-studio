@@ -19,6 +19,13 @@ const steps = [
   },
 ];
 
+const tips = [
+  'Lead with a hook on slide 1 — ask a question or make a bold claim',
+  'Keep slides to 15-25 words each for maximum readability',
+  'End with a clear call to action on the final slide',
+  'Use high-contrast images that look good at small sizes',
+];
+
 export default function HowItWorks() {
   return (
     <section id="how-it-works" className="mt-20 pt-12 border-t border-border">
@@ -37,6 +44,21 @@ export default function HowItWorks() {
           </div>
         ))}
       </div>
+
+      <div className="mt-12 max-w-lg mx-auto">
+        <h3 className="text-base font-serif font-semibold text-primary mb-4 text-center">
+          Tips for viral carousels
+        </h3>
+        <ul className="space-y-2.5">
+          {tips.map((tip, i) => (
+            <li key={i} className="flex items-start gap-2.5 text-sm text-secondary leading-relaxed">
+              <span className="text-muted mt-0.5 flex-shrink-0">&#8226;</span>
+              {tip}
+            </li>
+          ))}
+        </ul>
+      </div>
+
       <p className="text-center text-sm text-muted mt-10 pb-10">
         Built for creators who value clean design.
       </p>

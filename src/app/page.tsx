@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { UploadedImage, ProcessedSlide, AspectRatio } from '@/types';
+import { UploadedImage, ProcessedSlide, AspectRatio, FONTS } from '@/types';
 import { distributeText } from '@/lib/distributeText';
 import { renderSlide } from '@/lib/renderSlide';
 import Header from '@/components/Header';
@@ -9,6 +9,7 @@ import UploadZone from '@/components/UploadZone';
 import ImageGrid from '@/components/ImageGrid';
 import TextInput from '@/components/TextInput';
 import AspectToggle from '@/components/AspectToggle';
+import FontPicker from '@/components/FontPicker';
 import GenerateButton from '@/components/GenerateButton';
 import CarouselPreview from '@/components/CarouselPreview';
 import DownloadButtons from '@/components/DownloadButtons';
@@ -18,6 +19,7 @@ export default function Home() {
   const [images, setImages] = useState<UploadedImage[]>([]);
   const [text, setText] = useState('');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('1:1');
+  const [fontId, setFontId] = useState('dm-sans');
   const [slides, setSlides] = useState<ProcessedSlide[]>([]);
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
@@ -46,6 +48,8 @@ export default function Home() {
   const handleGenerate = useCallback(async () => {
     if (images.length === 0 || !text.trim()) return;
 
+    const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
+
     setProcessing(true);
     setSlides([]);
     setCurrentSlide(0);
@@ -57,7 +61,9 @@ export default function Home() {
     try {
       for (let i = 0; i < total; i++) {
         setProgress({ current: i + 1, total });
-        const imageData = await renderSlide(images[i].file, textChunks[i], aspectRatio);
+        const imageData = await renderSlide(
+          images[i].file, textChunks[i], aspectRatio, font.family, font.weight
+        );
         generated.push({
           imageData,
           slideNumber: i + 1,
@@ -71,7 +77,7 @@ export default function Home() {
       setProcessing(false);
       setProgress(null);
     }
-  }, [images, text, aspectRatio]);
+  }, [images, text, aspectRatio, fontId]);
 
   const canGenerate = images.length > 0 && text.trim().length > 0;
 
@@ -101,8 +107,11 @@ export default function Home() {
 
         {/* Text */}
         <section className="mb-6">
-          <TextInput value={text} onChange={setText} />
-          <AspectToggle value={aspectRatio} onChange={setAspectRatio} />
+          <TextInput value={text} onChange={setText} imageCount={images.length} />
+          <div className="flex flex-col sm:flex-row sm:items-center sm:gap-6">
+            <AspectToggle value={aspectRatio} onChange={setAspectRatio} />
+            <FontPicker value={fontId} onChange={setFontId} />
+          </div>
         </section>
 
         {/* Generate */}

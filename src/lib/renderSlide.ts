@@ -4,15 +4,28 @@ import { wrapText, calculateFontSize } from './wrapText';
 export async function renderSlide(
   imageFile: File,
   text: string,
-  aspectRatio: AspectRatio
+  aspectRatio: AspectRatio,
+  fontFamily: string = '"Helvetica Neue", "Arial", sans-serif',
+  fontWeight: number = 700
 ): Promise<string> {
   const img = await loadImage(imageFile);
-  const width = 1080;
-  const height = aspectRatio === '1:1' ? 1080 : 1350;
-  // Render at 2x for retina
   const scale = 2;
-  const canvasWidth = width * scale;
-  const canvasHeight = height * scale;
+  const baseWidth = 1080;
+
+  let canvasWidth: number;
+  let canvasHeight: number;
+
+  if (aspectRatio === 'original') {
+    const imgRatio = img.width / img.height;
+    canvasWidth = baseWidth * scale;
+    // Scale height proportionally, cap between 1080 and 1350 logical px
+    const logicalHeight = Math.round(Math.min(1350, Math.max(810, baseWidth / imgRatio)));
+    canvasHeight = logicalHeight * scale;
+  } else {
+    const height = aspectRatio === '1:1' ? 1080 : 1350;
+    canvasWidth = baseWidth * scale;
+    canvasHeight = height * scale;
+  }
 
   const canvas = document.createElement('canvas');
   canvas.width = canvasWidth;
@@ -21,7 +34,7 @@ export async function renderSlide(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  // Draw image covering the canvas (object-cover behavior)
+  // Draw image covering the canvas with face-aware cropping
   drawCover(ctx, img, canvasWidth, canvasHeight);
 
   // Draw gradient overlay on lower 50% for enough text coverage
@@ -39,7 +52,8 @@ export async function renderSlide(
     const padding = 60 * scale;
     const bottomPadding = 80 * scale;
     const maxWidth = canvasWidth - padding * 2;
-    const maxLines = aspectRatio === '1:1' ? 6 : 8;
+    const maxLinesFor1to1 = 6;
+    const maxLines = canvasHeight / canvasWidth >= 1.15 ? 8 : maxLinesFor1to1;
 
     const wordCount = text.trim().split(/\s+/).length;
     const baseFontSize = calculateFontSize(wordCount, scale);
@@ -47,14 +61,15 @@ export async function renderSlide(
     ctx.fillStyle = '#FFFFFF';
     ctx.textBaseline = 'top';
 
-    const { lines, finalFontSize } = wrapText(ctx, text, maxWidth, baseFontSize, maxLines);
+    const { lines, finalFontSize } = wrapText(
+      ctx, text, maxWidth, baseFontSize, maxLines, fontFamily, fontWeight
+    );
     const lineHeight = finalFontSize * 1.4;
     const totalTextHeight = lines.length * lineHeight;
-    // Clamp startY so text never renders above the gradient zone
     const rawStartY = canvasHeight - bottomPadding - totalTextHeight;
     const startY = Math.max(rawStartY, gradientStart + 20);
 
-    ctx.font = `bold ${finalFontSize}px "Helvetica Neue", "Arial", sans-serif`;
+    ctx.font = `${fontWeight} ${finalFontSize}px ${fontFamily}`;
     ctx.fillStyle = '#FFFFFF';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -73,7 +88,6 @@ function loadImage(file: File): Promise<HTMLImageElement> {
     const img = new Image();
     img.onload = async () => {
       URL.revokeObjectURL(url);
-      // Resize if too large
       if (img.width > 4000 || img.height > 4000) {
         try {
           const resized = await resizeImage(img, 4000);
@@ -118,17 +132,18 @@ function drawCover(
   let sx: number, sy: number, sw: number, sh: number;
 
   if (imgRatio > canvasRatio) {
-    // Image is wider — crop sides
+    // Image is wider — crop sides (center horizontally)
     sh = img.height;
     sw = img.height * canvasRatio;
     sx = (img.width - sw) / 2;
     sy = 0;
   } else {
     // Image is taller — crop top/bottom
+    // Bias toward top (0.15) to preserve faces in upper portion
     sw = img.width;
     sh = img.width / canvasRatio;
     sx = 0;
-    sy = (img.height - sh) / 2;
+    sy = (img.height - sh) * 0.15;
   }
 
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvasW, canvasH);

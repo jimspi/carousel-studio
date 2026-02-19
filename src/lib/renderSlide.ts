@@ -1,6 +1,11 @@
 import { AspectRatio } from '@/types';
 import { wrapText, calculateFontSize } from './wrapText';
 
+// Yield to browser between heavy operations to prevent UI freeze
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 export async function renderSlide(
   imageFile: File,
   text: string,
@@ -9,6 +14,10 @@ export async function renderSlide(
   fontWeight: number = 700
 ): Promise<string> {
   const img = await loadImage(imageFile);
+
+  // Yield after loading image
+  await yieldToMain();
+
   const scale = 2;
   const baseWidth = 1080;
 
@@ -18,7 +27,6 @@ export async function renderSlide(
   if (aspectRatio === 'original') {
     const imgRatio = img.width / img.height;
     canvasWidth = baseWidth * scale;
-    // Scale height proportionally, cap between 1080 and 1350 logical px
     const logicalHeight = Math.round(Math.min(1350, Math.max(810, baseWidth / imgRatio)));
     canvasHeight = logicalHeight * scale;
   } else {
@@ -34,10 +42,8 @@ export async function renderSlide(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  // Draw image covering the canvas with face-aware cropping
   drawCover(ctx, img, canvasWidth, canvasHeight);
 
-  // Draw gradient overlay on lower 50% for enough text coverage
   const gradientStart = canvasHeight * 0.50;
   const gradient = ctx.createLinearGradient(0, gradientStart, 0, canvasHeight);
   gradient.addColorStop(0, 'rgba(0,0,0,0)');
@@ -47,7 +53,6 @@ export async function renderSlide(
   ctx.fillStyle = gradient;
   ctx.fillRect(0, gradientStart, canvasWidth, canvasHeight - gradientStart);
 
-  // Render text if present
   if (text.trim()) {
     const padding = 60 * scale;
     const bottomPadding = 80 * scale;
@@ -78,6 +83,9 @@ export async function renderSlide(
       ctx.fillText(lines[i], canvasWidth / 2, startY + i * lineHeight);
     }
   }
+
+  // Yield after heavy canvas work before toDataURL
+  await yieldToMain();
 
   return canvas.toDataURL('image/png');
 }
@@ -132,14 +140,11 @@ function drawCover(
   let sx: number, sy: number, sw: number, sh: number;
 
   if (imgRatio > canvasRatio) {
-    // Image is wider — crop sides (center horizontally)
     sh = img.height;
     sw = img.height * canvasRatio;
     sx = (img.width - sw) / 2;
     sy = 0;
   } else {
-    // Image is taller — crop top/bottom
-    // Bias toward top (0.15) to preserve faces in upper portion
     sw = img.width;
     sh = img.width / canvasRatio;
     sx = 0;

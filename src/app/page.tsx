@@ -30,6 +30,20 @@ export default function Home() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [activeVersion, setActiveVersion] = useState<'yours' | 'suggested'>('yours');
 
+  const clearAll = useCallback(() => {
+    // Revoke all image URLs
+    images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+    setImages([]);
+    setText('');
+    setSlides([]);
+    setSuggestedSlides([]);
+    setSuggestedTips([]);
+    setCurrentSlide(0);
+    setActiveVersion('yours');
+    setProgress(null);
+    setProcessing(false);
+  }, [images]);
+
   const handleImagesAdded = useCallback((newImages: UploadedImage[]) => {
     setImages((prev) => [...prev, ...newImages]);
     setSlides([]);
@@ -75,7 +89,6 @@ export default function Home() {
     const sugGenerated: ProcessedSlide[] = [];
 
     try {
-      // Render both versions — user's even distribution first, then suggested
       for (let i = 0; i < total; i++) {
         setProgress({ current: i + 1, total: total * 2 });
         const imageData = await renderSlide(
@@ -123,11 +136,6 @@ export default function Home() {
 
   const canGenerate = images.length > 0 && text.trim().length > 0;
 
-  // Determine which slides the download buttons should reference
-  const downloadSlides = activeVersion === 'suggested' && suggestedSlides.length > 0
-    ? suggestedSlides
-    : slides;
-
   return (
     <>
       <Header />
@@ -135,7 +143,7 @@ export default function Home() {
         {/* Hero */}
         <div className="text-center mb-10">
           <h1 className="font-serif text-4xl font-semibold text-primary mb-3">
-            Turn your words into carousel posts
+            Turn your pictures and words into carousel posts
           </h1>
           <p className="text-lg text-secondary">
             Upload images, paste your text, download ready-to-post slides.
@@ -223,6 +231,16 @@ export default function Home() {
                 <DownloadButtons slides={suggestedSlides} currentSlide={currentSlide} />
               </>
             )}
+
+            {/* Make Another */}
+            <div className="mt-8 text-center">
+              <button
+                onClick={clearAll}
+                className="px-6 py-2.5 rounded-md text-sm font-medium border border-border text-secondary hover:text-primary hover:bg-hover transition-all duration-150"
+              >
+                Make Another Carousel
+              </button>
+            </div>
           </section>
         )}
 

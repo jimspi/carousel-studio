@@ -1,3 +1,5 @@
+import { distributeText } from './distributeText';
+
 export interface SuggestedResult {
   chunks: string[];
   tips: string[];
@@ -31,11 +33,24 @@ export function distributeSuggestedText(
 
   const sentences = splitSentences(cleaned);
 
-  // If we have very few sentences relative to images, use word-based splitting
-  // with viral structure (short hook on slide 1, short closer on last)
-  if (sentences.length < 2) {
-    return buildFromWords(cleaned, imageCount, tips, idealSlideCount);
+  // Not enough sentences for meaningful hook/closer structure — use the
+  // smart distributeText which handles clause splitting and minimum chunk sizes,
+  // then just add tips about the structure.
+  if (sentences.length < 3 && imageCount > 2) {
+    const chunks = distributeText(cleaned, imageCount);
+    if (sentences.length === 0) {
+      tips.push('Text has no clear sentences. Consider adding punctuation for better slide breaks.');
+    }
+    tips.push('Text distributed evenly across slides. Add more sentence breaks for finer control.');
+
+    const overallAvg = Math.round(totalWords / imageCount);
+    if (overallAvg >= 15 && overallAvg <= 25) {
+      tips.push(`Averaging ~${overallAvg} words/slide — right in the viral sweet spot.`);
+    }
+    return { chunks, tips, idealSlideCount };
   }
+
+  // Enough sentences for hook/body/closer structure
 
   // --- Slide 1: Hook ---
   const firstSentence = sentences[0];
@@ -83,30 +98,17 @@ export function distributeSuggestedText(
     return { chunks, tips, idealSlideCount };
   }
 
-  // Collect remaining sentences for middle slots
-  const remainingSentences = sentences.length > 2
-    ? sentences.slice(1, -1)
-    : [];
+  // Gather the body text (everything except first and last sentences)
+  const bodyText = sentences.length > 2
+    ? sentences.slice(1, -1).join(' ')
+    : '';
 
-  // If no remaining sentences for middle, use word splitting on the body text
-  if (remainingSentences.length === 0) {
-    // Reconstruct body from everything except hook and closer sentences
-    const bodyText = sentences.slice(1, -1).join(' ') || '';
-    if (bodyText) {
-      const middleChunks = splitWordsIntoSlots(bodyText, middleSlotCount);
-      const chunks = [hookText, ...middleChunks, closerText];
-      return { chunks, tips, idealSlideCount };
-    }
-    // Very few sentences — fill middle with empty
-    const chunks = [hookText, ...Array(middleSlotCount).fill(''), closerText];
-    return { chunks, tips, idealSlideCount };
-  }
-
-  const middleChunks = distributeMiddle(remainingSentences, middleSlotCount);
-
-  const avgMiddle = middleChunks.reduce((sum, c) => sum + (c ? c.split(/\s+/).length : 0), 0) / Math.max(1, middleSlotCount);
-  if (avgMiddle > 25 && avgMiddle <= 40) {
-    tips.push(`Middle slides average ~${Math.round(avgMiddle)} words each. Consider trimming for easier reading.`);
+  // Use the smart distributeText for the middle portion
+  let middleChunks: string[];
+  if (bodyText) {
+    middleChunks = distributeText(bodyText, middleSlotCount);
+  } else {
+    middleChunks = Array(middleSlotCount).fill('');
   }
 
   const overallAvg = Math.round(totalWords / imageCount);
@@ -118,99 +120,9 @@ export function distributeSuggestedText(
   return { chunks, tips, idealSlideCount };
 }
 
-/**
- * For text without sentence breaks — split by words with viral structure.
- */
-function buildFromWords(
-  text: string,
-  imageCount: number,
-  tips: string[],
-  idealSlideCount: number
-): SuggestedResult {
-  const words = text.split(/\s+/).filter((w) => w.length > 0);
-
-  if (words.length <= imageCount) {
-    // Very little text — spread words evenly
-    const chunks: string[] = [];
-    for (let i = 0; i < imageCount; i++) {
-      chunks.push(i < words.length ? words[i] : '');
-    }
-    tips.push('Very short text — consider adding more content for impact.');
-    return { chunks, tips, idealSlideCount };
-  }
-
-  // Short hook (first ~20% of words, min 3), body in middle, short closer
-  const hookWordCount = Math.max(3, Math.min(12, Math.floor(words.length * 0.2)));
-  const closerWordCount = Math.max(3, Math.min(10, Math.floor(words.length * 0.15)));
-  const hookWords = words.slice(0, hookWordCount);
-  const closerWords = words.slice(words.length - closerWordCount);
-  const bodyWords = words.slice(hookWordCount, words.length - closerWordCount);
-
-  const hookText = hookWords.join(' ') + '...';
-  const closerText = closerWords.join(' ');
-  tips.push('Text has no clear sentences. Slide 1 uses a short hook, last slide uses a short closer.');
-
-  const middleSlotCount = imageCount - 2;
-  if (middleSlotCount <= 0) {
-    return { chunks: [hookText, closerText], tips, idealSlideCount };
-  }
-
-  const middleChunks = splitWordsIntoSlots(bodyWords.join(' '), middleSlotCount);
-  return { chunks: [hookText, ...middleChunks, closerText], tips, idealSlideCount };
-}
-
 function splitSentences(text: string): string[] {
   const regex = /[^.!?]*[.!?]+(?:\s|$)/g;
   const matches = text.match(regex);
   if (!matches || matches.length === 0) return [];
   return matches.map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
-function splitWordsIntoSlots(text: string, slotCount: number): string[] {
-  const words = text.split(/\s+/).filter((w) => w.length > 0);
-  if (words.length === 0) return Array(slotCount).fill('');
-
-  const base = Math.floor(words.length / slotCount);
-  const extra = words.length % slotCount;
-  const result: string[] = [];
-  let idx = 0;
-
-  for (let i = 0; i < slotCount; i++) {
-    const count = base + (i < extra ? 1 : 0);
-    if (count === 0) {
-      result.push('');
-    } else {
-      result.push(words.slice(idx, idx + count).join(' '));
-      idx += count;
-    }
-  }
-
-  return result;
-}
-
-function distributeMiddle(sentences: string[], slotCount: number): string[] {
-  if (slotCount <= 0) return [];
-  if (sentences.length === 0) return Array(slotCount).fill('');
-
-  if (sentences.length <= slotCount) {
-    const result: string[] = [];
-    for (let i = 0; i < slotCount; i++) {
-      result.push(i < sentences.length ? sentences[i] : '');
-    }
-    return result;
-  }
-
-  const base = Math.floor(sentences.length / slotCount);
-  const extra = sentences.length % slotCount;
-  const result: string[] = [];
-  let idx = 0;
-
-  for (let i = 0; i < slotCount; i++) {
-    const count = base + (i < extra ? 1 : 0);
-    const chunk = sentences.slice(idx, idx + count).join(' ');
-    result.push(chunk);
-    idx += count;
-  }
-
-  return result;
 }

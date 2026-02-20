@@ -1,3 +1,12 @@
+/**
+ * Distribute text across slides using a greedy word-boundary scoring algorithm.
+ *
+ * Rules:
+ *  - NEVER put fewer than 3 words on a slide (uses fewer slides instead)
+ *  - Target ~15-18 words per slide when possible
+ *  - Squeeze more words per slide if the text demands it
+ *  - Prefer breaking at sentence ends > clause punctuation > conjunctions > anywhere
+ */
 export function distributeText(fullText: string, imageCount: number): string[] {
   const cleaned = fullText.replace(/\s+/g, ' ').trim();
 
@@ -9,181 +18,137 @@ export function distributeText(fullText: string, imageCount: number): string[] {
     return [cleaned];
   }
 
-  // Step 1: Split into sentences
-  const sentences = splitSentences(cleaned);
+  const words = cleaned.split(/\s+/);
+  const totalWords = words.length;
+  const MIN_WORDS = 3;
 
-  // Step 2: If enough sentences, distribute evenly
-  if (sentences.length >= imageCount) {
-    return groupChunks(sentences, imageCount);
+  // How many slides can we actually fill with at least MIN_WORDS each?
+  const usableSlides = Math.min(imageCount, Math.floor(totalWords / MIN_WORDS));
+
+  if (usableSlides <= 1) {
+    const result = [cleaned];
+    while (result.length < imageCount) result.push('');
+    return result;
   }
 
-  // Step 3: Not enough sentences. Break sentences into clauses at
-  // commas, semicolons, colons, dashes, and conjunctions.
-  let chunks: string[] = [];
-  if (sentences.length > 0) {
-    for (const sentence of sentences) {
-      chunks.push(...splitIntoClauses(sentence));
-    }
-  } else {
-    // No sentence punctuation at all — split whole text into clauses
-    chunks.push(...splitIntoClauses(cleaned));
+  // Score every word boundary. boundaryScore[i] = quality of breaking
+  // after words[i] (i.e. ending a slide on words[i], next slide starts at words[i+1]).
+  const boundaryScore = scoreBoundaries(words);
+
+  // Find optimal break points greedily
+  const breakIndices = findBreakPoints(words, usableSlides, boundaryScore, MIN_WORDS);
+
+  // Build chunks from break points
+  const result: string[] = [];
+  let start = 0;
+  for (const bp of breakIndices) {
+    result.push(words.slice(start, bp).join(' '));
+    start = bp;
+  }
+  result.push(words.slice(start).join(' '));
+
+  // Pad with empty strings if we used fewer slides than imageCount
+  while (result.length < imageCount) {
+    result.push('');
   }
 
-  // Merge any tiny clauses (< 4 words) back into their neighbor
-  chunks = mergeSmallChunks(chunks, 4);
-
-  if (chunks.length >= imageCount) {
-    return groupChunks(chunks, imageCount);
-  }
-
-  // Step 4: Still not enough chunks. Subdivide the largest chunks by
-  // words until we have enough, respecting a minimum of 3 words per chunk.
-  chunks = subdivideToFit(chunks, imageCount, 3);
-
-  // Step 5: Final merge pass — never allow a chunk with fewer than 3 words
-  chunks = mergeSmallChunks(chunks, 3);
-
-  // Pad or trim to match imageCount.
-  // Any remaining empty slides go at the end — better than orphan words.
-  if (chunks.length > imageCount) {
-    return groupChunks(chunks, imageCount);
-  }
-  while (chunks.length < imageCount) {
-    chunks.push('');
-  }
-
-  return chunks;
+  return result;
 }
 
 // ---- Helpers ----
 
-function splitSentences(text: string): string[] {
-  const regex = /[^.!?]*[.!?]+(?:\s|$)/g;
-  const matches = text.match(regex);
-  if (!matches || matches.length === 0) return [];
-  return matches.map((s) => s.trim()).filter((s) => s.length > 0);
-}
+const CONJUNCTIONS = new Set([
+  'and', 'but', 'or', 'so', 'yet', 'because', 'however', 'then',
+  'which', 'where', 'while', 'when', 'although', 'though', 'since',
+  'unless', 'until', 'after', 'before', 'if',
+]);
 
 /**
- * Split a piece of text at natural pause points: commas, semicolons,
- * colons, em-dashes, and before coordinating conjunctions.
- * Conjunctions stay with the text that follows them.
+ * Score each word boundary. boundaryScore[i] represents the quality of
+ * placing a slide break after words[i].
+ *   3 = sentence end (. ! ?)
+ *   2 = clause punctuation (, ; : —)
+ *   1 = before a conjunction (and, but, because, …)
+ *   0 = no natural break
  */
-function splitIntoClauses(text: string): string[] {
-  // Split after punctuation marks, or right before conjunctions so the
-  // conjunction starts the next chunk (e.g. "and then runs...")
-  const parts = text.split(/(?<=[,;:\u2014])\s+|\s+(?=(?:and|but|or|so|yet|because|however|then|which|where|while)\s)/i);
-  return parts.map((p) => p.trim()).filter((p) => p.length > 0);
-}
+function scoreBoundaries(words: string[]): number[] {
+  const scores: number[] = [];
 
-/**
- * Merge any chunk with fewer than `minWords` words into its neighbor.
- * Prefers merging forward (append to previous); if it's the first chunk,
- * merges with the next one.
- */
-function mergeSmallChunks(chunks: string[], minWords: number): string[] {
-  if (chunks.length <= 1) return chunks;
+  for (let i = 0; i < words.length - 1; i++) {
+    const word = words[i];
+    const nextWord = words[i + 1];
+    const nextLower = nextWord.toLowerCase().replace(/[^a-z]/g, '');
 
-  const result: string[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const wordCount = chunks[i].split(/\s+/).filter(Boolean).length;
-    if (wordCount < minWords && result.length > 0) {
-      // Merge into previous
-      result[result.length - 1] += ' ' + chunks[i];
-    } else if (wordCount < minWords && i < chunks.length - 1) {
-      // First chunk is tiny — prepend to next
-      chunks[i + 1] = chunks[i] + ' ' + chunks[i + 1];
+    if (/[.!?]["'\u201D\u2019)]*$/.test(word)) {
+      scores.push(3); // Sentence end — best break
+    } else if (/[,;:\u2014]$/.test(word)) {
+      scores.push(2); // Clause boundary
+    } else if (CONJUNCTIONS.has(nextLower)) {
+      scores.push(1); // Before conjunction
     } else {
-      result.push(chunks[i]);
+      scores.push(0);
     }
   }
 
-  return result;
+  return scores;
 }
 
 /**
- * Group an array of text chunks into exactly `groupCount` groups by
- * joining adjacent chunks. Distributes as evenly as possible.
+ * Greedily find (slideCount - 1) break points that divide words[] into
+ * slideCount chunks. Each break point is the word index where the next
+ * chunk starts.
+ *
+ * For each slide, we compute the ideal end position, then search nearby
+ * for the highest-quality boundary. Ties go to the boundary closest to ideal.
  */
-function groupChunks(chunks: string[], groupCount: number): string[] {
-  if (chunks.length <= groupCount) {
-    const result = [...chunks];
-    while (result.length < groupCount) result.push('');
-    return result;
-  }
-
-  const base = Math.floor(chunks.length / groupCount);
-  const extra = chunks.length % groupCount;
-  const result: string[] = [];
-  let idx = 0;
-
-  for (let i = 0; i < groupCount; i++) {
-    const count = base + (i < extra ? 1 : 0);
-    result.push(chunks.slice(idx, idx + count).join(' '));
-    idx += count;
-  }
-
-  return result;
-}
-
-/**
- * Subdivide the longest chunks until we reach the target count.
- * Prefers splitting before conjunctions/prepositions near the midpoint
- * so text reads naturally. Falls back to midpoint if no good break found.
- */
-function subdivideToFit(
-  chunks: string[],
-  targetCount: number,
+function findBreakPoints(
+  words: string[],
+  slideCount: number,
+  boundaryScore: number[],
   minWords: number
-): string[] {
-  const breakWords = new Set([
-    'and', 'but', 'or', 'so', 'yet', 'because', 'however', 'then',
-    'which', 'where', 'while', 'when', 'that', 'to', 'for', 'with',
-    'into', 'from', 'about', 'through',
-  ]);
+): number[] {
+  const totalWords = words.length;
+  const breaks: number[] = [];
+  let pos = 0;
 
-  const result = [...chunks];
+  for (let s = 0; s < slideCount - 1; s++) {
+    const remainingSlides = slideCount - s;
+    const wordsLeft = totalWords - pos;
+    const target = wordsLeft / remainingSlides;
+    const idealBreak = pos + target; // fractional ideal position (word index where next chunk starts)
 
-  while (result.length < targetCount) {
-    let longestIdx = -1;
-    let longestWordCount = 0;
+    // Constraints: each remaining chunk must have at least minWords
+    const earliest = pos + minWords;
+    const latest = totalWords - minWords * (remainingSlides - 1);
 
-    for (let i = 0; i < result.length; i++) {
-      const wc = result[i].split(/\s+/).filter(Boolean).length;
-      if (wc >= minWords * 2 && wc > longestWordCount) {
-        longestWordCount = wc;
-        longestIdx = i;
+    if (earliest > latest) {
+      break; // Can't split further without violating minimums
+    }
+
+    // Search window: ~40% of target on each side, at least 3 words
+    const radius = Math.max(3, Math.ceil(target * 0.4));
+    const searchFrom = Math.max(earliest, Math.floor(idealBreak - radius));
+    const searchTo = Math.min(latest, Math.ceil(idealBreak + radius));
+
+    let bestPos = Math.max(earliest, Math.min(latest, Math.round(idealBreak)));
+    let bestScore = -1;
+    let bestDist = Infinity;
+
+    for (let i = searchFrom; i <= searchTo; i++) {
+      // boundaryScore[i-1] = quality of breaking after words[i-1], before words[i]
+      const score = i > 0 && i - 1 < boundaryScore.length ? boundaryScore[i - 1] : 0;
+      const dist = Math.abs(i - idealBreak);
+
+      if (score > bestScore || (score === bestScore && dist < bestDist)) {
+        bestScore = score;
+        bestDist = dist;
+        bestPos = i;
       }
     }
 
-    if (longestIdx === -1) break;
-
-    const words = result[longestIdx].split(/\s+/).filter(Boolean);
-    const mid = Math.ceil(words.length / 2);
-
-    // Look for a natural break word near the midpoint (within 3 words)
-    let splitAt = mid;
-    for (let offset = 0; offset <= 3; offset++) {
-      // Check after midpoint first, then before
-      if (mid + offset < words.length - minWords + 1 && breakWords.has(words[mid + offset].toLowerCase())) {
-        splitAt = mid + offset;
-        break;
-      }
-      if (mid - offset >= minWords && breakWords.has(words[mid - offset].toLowerCase())) {
-        splitAt = mid - offset;
-        break;
-      }
-    }
-
-    // Ensure both halves meet minimum
-    if (splitAt < minWords) splitAt = minWords;
-    if (words.length - splitAt < minWords) splitAt = words.length - minWords;
-
-    const firstHalf = words.slice(0, splitAt).join(' ');
-    const secondHalf = words.slice(splitAt).join(' ');
-
-    result.splice(longestIdx, 1, firstHalf, secondHalf);
+    breaks.push(bestPos);
+    pos = bestPos;
   }
 
-  return result;
+  return breaks;
 }

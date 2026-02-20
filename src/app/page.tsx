@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { UploadedImage, ProcessedSlide, AspectRatio, FONTS } from '@/types';
 import { distributeText } from '@/lib/distributeText';
 import { distributeSuggestedText } from '@/lib/distributeSuggestedText';
@@ -29,9 +29,19 @@ export default function Home() {
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [activeVersion, setActiveVersion] = useState<'yours' | 'suggested'>('yours');
+  const [editingText, setEditingText] = useState('');
+  const [updatingSlide, setUpdatingSlide] = useState(false);
+
+  // Derive active slides for the current version
+  const activeSlides = activeVersion === 'yours' ? slides : suggestedSlides;
+  const currentSlideText = activeSlides[currentSlide]?.textContent ?? '';
+
+  // Sync editing text when navigating slides or switching versions
+  useEffect(() => {
+    setEditingText(currentSlideText);
+  }, [currentSlideText]);
 
   const clearAll = useCallback(() => {
-    // Revoke all image URLs
     images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
     setImages([]);
     setText('');
@@ -42,6 +52,7 @@ export default function Home() {
     setActiveVersion('yours');
     setProgress(null);
     setProcessing(false);
+    setEditingText('');
   }, [images]);
 
   const handleImagesAdded = useCallback((newImages: UploadedImage[]) => {
@@ -134,7 +145,36 @@ export default function Home() {
     }
   }, [suggestedSlides]);
 
+  const handleUpdateSlideText = useCallback(async () => {
+    if (currentSlide >= images.length) return;
+    const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
+    setUpdatingSlide(true);
+    try {
+      const newImageData = await renderSlide(
+        images[currentSlide].file,
+        editingText,
+        aspectRatio,
+        font.family,
+        font.weight
+      );
+      const updater = (prev: ProcessedSlide[]) =>
+        prev.map((s, i) =>
+          i === currentSlide
+            ? { ...s, imageData: newImageData, textContent: editingText }
+            : s
+        );
+      if (activeVersion === 'yours') {
+        setSlides(updater);
+      } else {
+        setSuggestedSlides(updater);
+      }
+    } finally {
+      setUpdatingSlide(false);
+    }
+  }, [currentSlide, editingText, images, aspectRatio, fontId, activeVersion]);
+
   const canGenerate = images.length > 0 && text.trim().length > 0;
+  const textChanged = editingText !== currentSlideText;
 
   return (
     <>
@@ -210,26 +250,55 @@ export default function Home() {
 
             {/* Your Version */}
             {activeVersion === 'yours' && (
-              <>
-                <CarouselPreview
-                  slides={slides}
-                  onSlideChange={setCurrentSlide}
-                />
-                <DownloadButtons slides={slides} currentSlide={currentSlide} />
-              </>
+              <CarouselPreview
+                slides={slides}
+                onSlideChange={setCurrentSlide}
+              />
             )}
 
             {/* Suggested Version */}
             {activeVersion === 'suggested' && suggestedSlides.length > 0 && (
-              <>
-                <SuggestedPreview
-                  slides={suggestedSlides}
-                  tips={suggestedTips}
-                  onUseSuggested={handleUseSuggested}
-                  onSlideChange={setCurrentSlide}
+              <SuggestedPreview
+                slides={suggestedSlides}
+                tips={suggestedTips}
+                onUseSuggested={handleUseSuggested}
+                onSlideChange={setCurrentSlide}
+              />
+            )}
+
+            {/* Slide text editor */}
+            {activeSlides.length > 0 && (
+              <div className="max-w-[540px] mx-auto mt-4">
+                <label className="block text-xs font-medium text-secondary mb-1.5">
+                  Slide {currentSlide + 1} text
+                </label>
+                <textarea
+                  value={editingText}
+                  onChange={(e) => setEditingText(e.target.value)}
+                  placeholder="Add or edit text for this slide..."
+                  className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface text-primary resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all duration-150"
+                  rows={3}
                 />
-                <DownloadButtons slides={suggestedSlides} currentSlide={currentSlide} />
-              </>
+                {textChanged && (
+                  <div className="flex justify-end mt-2">
+                    <button
+                      onClick={handleUpdateSlideText}
+                      disabled={updatingSlide}
+                      className="px-4 py-1.5 text-sm font-medium rounded-md bg-primary text-white hover:bg-accent-hover transition-all duration-150 disabled:opacity-50"
+                    >
+                      {updatingSlide ? 'Updating...' : 'Update Slide'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Download */}
+            {activeVersion === 'yours' && (
+              <DownloadButtons slides={slides} currentSlide={currentSlide} />
+            )}
+            {activeVersion === 'suggested' && suggestedSlides.length > 0 && (
+              <DownloadButtons slides={suggestedSlides} currentSlide={currentSlide} />
             )}
 
             {/* Make Another */}

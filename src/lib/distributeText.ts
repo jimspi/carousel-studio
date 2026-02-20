@@ -2,9 +2,8 @@
  * Distribute text across slides using a greedy word-boundary scoring algorithm.
  *
  * Rules:
- *  - NEVER put fewer than 3 words on a slide (uses fewer slides instead)
- *  - Target ~15-18 words per slide when possible
- *  - Squeeze more words per slide if the text demands it
+ *  - Every slide gets text — no empty slides (unless fewer words than slides)
+ *  - Target ~15-18 words per slide when possible, squeeze more if needed
  *  - Prefer breaking at sentence ends > clause punctuation > conjunctions > anywhere
  */
 export function distributeText(fullText: string, imageCount: number): string[] {
@@ -20,23 +19,17 @@ export function distributeText(fullText: string, imageCount: number): string[] {
 
   const words = cleaned.split(/\s+/);
   const totalWords = words.length;
-  const MIN_WORDS = 3;
 
-  // How many slides can we actually fill with at least MIN_WORDS each?
-  const usableSlides = Math.min(imageCount, Math.floor(totalWords / MIN_WORDS));
-
-  if (usableSlides <= 1) {
-    const result = [cleaned];
+  // Fewer words than slides — give each slide 1 word, rest empty
+  if (totalWords <= imageCount) {
+    const result = [...words];
     while (result.length < imageCount) result.push('');
     return result;
   }
 
-  // Score every word boundary. boundaryScore[i] = quality of breaking
-  // after words[i] (i.e. ending a slide on words[i], next slide starts at words[i+1]).
+  // Score every word boundary and find optimal break points
   const boundaryScore = scoreBoundaries(words);
-
-  // Find optimal break points greedily
-  const breakIndices = findBreakPoints(words, usableSlides, boundaryScore, MIN_WORDS);
+  const breakIndices = findBreakPoints(words, imageCount, boundaryScore);
 
   // Build chunks from break points
   const result: string[] = [];
@@ -46,11 +39,6 @@ export function distributeText(fullText: string, imageCount: number): string[] {
     start = bp;
   }
   result.push(words.slice(start).join(' '));
-
-  // Pad with empty strings if we used fewer slides than imageCount
-  while (result.length < imageCount) {
-    result.push('');
-  }
 
   return result;
 }
@@ -96,7 +84,7 @@ function scoreBoundaries(words: string[]): number[] {
 /**
  * Greedily find (slideCount - 1) break points that divide words[] into
  * slideCount chunks. Each break point is the word index where the next
- * chunk starts.
+ * chunk starts. Every chunk is guaranteed at least 1 word.
  *
  * For each slide, we compute the ideal end position, then search nearby
  * for the highest-quality boundary. Ties go to the boundary closest to ideal.
@@ -104,8 +92,7 @@ function scoreBoundaries(words: string[]): number[] {
 function findBreakPoints(
   words: string[],
   slideCount: number,
-  boundaryScore: number[],
-  minWords: number
+  boundaryScore: number[]
 ): number[] {
   const totalWords = words.length;
   const breaks: number[] = [];
@@ -115,14 +102,14 @@ function findBreakPoints(
     const remainingSlides = slideCount - s;
     const wordsLeft = totalWords - pos;
     const target = wordsLeft / remainingSlides;
-    const idealBreak = pos + target; // fractional ideal position (word index where next chunk starts)
+    const idealBreak = pos + target;
 
-    // Constraints: each remaining chunk must have at least minWords
-    const earliest = pos + minWords;
-    const latest = totalWords - minWords * (remainingSlides - 1);
+    // Each remaining chunk must have at least 1 word
+    const earliest = pos + 1;
+    const latest = totalWords - (remainingSlides - 1);
 
     if (earliest > latest) {
-      break; // Can't split further without violating minimums
+      break;
     }
 
     // Search window: ~40% of target on each side, at least 3 words
@@ -135,7 +122,6 @@ function findBreakPoints(
     let bestDist = Infinity;
 
     for (let i = searchFrom; i <= searchTo; i++) {
-      // boundaryScore[i-1] = quality of breaking after words[i-1], before words[i]
       const score = i > 0 && i - 1 < boundaryScore.length ? boundaryScore[i - 1] : 0;
       const dist = Math.abs(i - idealBreak);
 

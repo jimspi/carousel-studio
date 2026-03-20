@@ -25,17 +25,6 @@ const DEFAULT_STYLE: SlideStyle = {
   imageOffsetY: 0.15,
 };
 
-// localStorage helpers
-function loadSaved<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const v = localStorage.getItem(`carousel-studio-${key}`);
-    return v ? JSON.parse(v) : fallback;
-  } catch { return fallback; }
-}
-function save(key: string, value: unknown) {
-  try { localStorage.setItem(`carousel-studio-${key}`, JSON.stringify(value)); } catch {}
-}
 
 export default function Home() {
   const [images, setImages] = useState<UploadedImage[]>([]);
@@ -62,20 +51,14 @@ export default function Home() {
   const undoStack = useRef<ProcessedSlide[][]>([]);
   const redoStack = useRef<ProcessedSlide[][]>([]);
 
-  // Restore saved inputs on mount
-  const mounted = useRef(false);
+  // Clear any stale persisted data on mount
   useEffect(() => {
-    if (mounted.current) return;
-    mounted.current = true;
-    setText(loadSaved('text', ''));
-    setAspectRatio(loadSaved('aspectRatio', '1:1'));
-    setFontId(loadSaved('fontId', 'dm-sans'));
+    try {
+      localStorage.removeItem('carousel-studio-text');
+      localStorage.removeItem('carousel-studio-aspectRatio');
+      localStorage.removeItem('carousel-studio-fontId');
+    } catch {}
   }, []);
-
-  // Persist inputs on change
-  useEffect(() => { if (mounted.current) save('text', text); }, [text]);
-  useEffect(() => { if (mounted.current) save('aspectRatio', aspectRatio); }, [aspectRatio]);
-  useEffect(() => { if (mounted.current) save('fontId', fontId); }, [fontId]);
 
   // Revoke blob URLs for old slides to free memory
   const revokeSlideURLs = useCallback((oldSlides: ProcessedSlide[]) => {

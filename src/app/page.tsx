@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { UploadedImage, ProcessedSlide, AspectRatio, FONTS } from '@/types';
+import { UploadedImage, ProcessedSlide, AspectRatio, SlideStyle, FONTS, TEXT_COLORS } from '@/types';
 import { distributeText } from '@/lib/distributeText';
 import { distributeSuggestedText } from '@/lib/distributeSuggestedText';
 import { renderSlide } from '@/lib/renderSlide';
@@ -17,6 +17,26 @@ import SuggestedPreview from '@/components/SuggestedPreview';
 import DownloadButtons from '@/components/DownloadButtons';
 import HowItWorks from '@/components/HowItWorks';
 
+const DEFAULT_STYLE: SlideStyle = {
+  isQuote: false,
+  textPosition: 'bottom',
+  textColor: '#FFFFFF',
+  gradientIntensity: 'medium',
+  imageOffsetY: 0.15,
+};
+
+// localStorage helpers
+function loadSaved<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const v = localStorage.getItem(`carousel-studio-${key}`);
+    return v ? JSON.parse(v) : fallback;
+  } catch { return fallback; }
+}
+function save(key: string, value: unknown) {
+  try { localStorage.setItem(`carousel-studio-${key}`, JSON.stringify(value)); } catch {}
+}
+
 export default function Home() {
   const [images, setImages] = useState<UploadedImage[]>([]);
   const [text, setText] = useState('');
@@ -30,8 +50,27 @@ export default function Home() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [activeVersion, setActiveVersion] = useState<'yours' | 'suggested'>('yours');
   const [editingText, setEditingText] = useState('');
-  const [editingQuote, setEditingQuote] = useState(false);
+  const [editingStyle, setEditingStyle] = useState<SlideStyle>({ ...DEFAULT_STYLE });
   const [updatingSlide, setUpdatingSlide] = useState(false);
+
+  // Undo / redo history
+  const undoStack = useRef<ProcessedSlide[][]>([]);
+  const redoStack = useRef<ProcessedSlide[][]>([]);
+
+  // Restore saved inputs on mount
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (mounted.current) return;
+    mounted.current = true;
+    setText(loadSaved('text', ''));
+    setAspectRatio(loadSaved('aspectRatio', '1:1'));
+    setFontId(loadSaved('fontId', 'dm-sans'));
+  }, []);
+
+  // Persist inputs on change
+  useEffect(() => { if (mounted.current) save('text', text); }, [text]);
+  useEffect(() => { if (mounted.current) save('aspectRatio', aspectRatio); }, [aspectRatio]);
+  useEffect(() => { if (mounted.current) save('fontId', fontId); }, [fontId]);
 
   // Revoke blob URLs for old slides to free memory
   const revokeSlideURLs = useCallback((oldSlides: ProcessedSlide[]) => {
@@ -44,13 +83,38 @@ export default function Home() {
   const activeSlides = activeVersion === 'yours' ? slides : suggestedSlides;
   const currentSlideData = activeSlides[currentSlide];
   const currentSlideText = currentSlideData?.textContent ?? '';
-  const currentSlideIsQuote = currentSlideData?.isQuote ?? false;
+  const currentSlideStyle = currentSlideData?.style ?? { ...DEFAULT_STYLE };
 
-  // Sync editing text and quote toggle when navigating slides or switching versions
+  // Sync editing text and style when navigating slides or switching versions
   useEffect(() => {
     setEditingText(currentSlideText);
-    setEditingQuote(currentSlideIsQuote);
-  }, [currentSlideText, currentSlideIsQuote]);
+    setEditingStyle({ ...DEFAULT_STYLE, ...currentSlideStyle });
+  }, [currentSlideText, currentSlideStyle]);
+
+  // Push current slides to undo stack before a change
+  const pushUndo = useCallback(() => {
+    const target = activeVersion === 'yours' ? slides : suggestedSlides;
+    undoStack.current.push([...target]);
+    redoStack.current = [];
+  }, [slides, suggestedSlides, activeVersion]);
+
+  const handleUndo = useCallback(() => {
+    const prev = undoStack.current.pop();
+    if (!prev) return;
+    const target = activeVersion === 'yours' ? slides : suggestedSlides;
+    redoStack.current.push([...target]);
+    if (activeVersion === 'yours') setSlides(prev);
+    else setSuggestedSlides(prev);
+  }, [slides, suggestedSlides, activeVersion]);
+
+  const handleRedo = useCallback(() => {
+    const next = redoStack.current.pop();
+    if (!next) return;
+    const target = activeVersion === 'yours' ? slides : suggestedSlides;
+    undoStack.current.push([...target]);
+    if (activeVersion === 'yours') setSlides(next);
+    else setSuggestedSlides(next);
+  }, [slides, suggestedSlides, activeVersion]);
 
   const clearAll = useCallback(() => {
     images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
@@ -66,7 +130,9 @@ export default function Home() {
     setProgress(null);
     setProcessing(false);
     setEditingText('');
-    setEditingQuote(false);
+    setEditingStyle({ ...DEFAULT_STYLE });
+    undoStack.current = [];
+    redoStack.current = [];
   }, [images, slides, suggestedSlides, revokeSlideURLs]);
 
   const handleImagesAdded = useCallback((newImages: UploadedImage[]) => {
@@ -108,6 +174,8 @@ export default function Home() {
     setSuggestedTips([]);
     setCurrentSlide(0);
     setActiveVersion('yours');
+    undoStack.current = [];
+    redoStack.current = [];
 
     const textChunks = distributeText(text, images.length);
     const suggested = distributeSuggestedText(text, images.length);
@@ -125,6 +193,7 @@ export default function Home() {
           imageData,
           slideNumber: i + 1,
           textContent: textChunks[i],
+          style: { ...DEFAULT_STYLE },
         });
       }
 
@@ -137,6 +206,7 @@ export default function Home() {
           imageData,
           slideNumber: i + 1,
           textContent: suggested.chunks[i] || '',
+          style: { ...DEFAULT_STYLE },
         });
       }
 
@@ -164,6 +234,7 @@ export default function Home() {
   const handleUpdateSlideText = useCallback(async () => {
     if (currentSlide >= images.length) return;
     const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
+    pushUndo();
     setUpdatingSlide(true);
     try {
       const oldImageData = activeSlides[currentSlide]?.imageData;
@@ -173,13 +244,13 @@ export default function Home() {
         aspectRatio,
         font.family,
         font.weight,
-        editingQuote
+        editingStyle
       );
       if (oldImageData?.startsWith('blob:')) URL.revokeObjectURL(oldImageData);
       const updater = (prev: ProcessedSlide[]) =>
         prev.map((s, i) =>
           i === currentSlide
-            ? { ...s, imageData: newImageData, textContent: editingText, isQuote: editingQuote }
+            ? { ...s, imageData: newImageData, textContent: editingText, style: { ...editingStyle } }
             : s
         );
       if (activeVersion === 'yours') {
@@ -190,10 +261,44 @@ export default function Home() {
     } finally {
       setUpdatingSlide(false);
     }
-  }, [currentSlide, editingText, editingQuote, images, aspectRatio, fontId, activeVersion, activeSlides]);
+  }, [currentSlide, editingText, editingStyle, images, aspectRatio, fontId, activeVersion, activeSlides, pushUndo]);
+
+  // Reorder generated slides
+  const handleMoveSlide = useCallback((direction: -1 | 1) => {
+    const target = currentSlide + direction;
+    if (target < 0 || target >= activeSlides.length) return;
+    pushUndo();
+
+    const reorderArr = <T,>(arr: T[]) => {
+      const next = [...arr];
+      [next[currentSlide], next[target]] = [next[target], next[currentSlide]];
+      return next.map((item, i) => ({ ...item, slideNumber: i + 1 }));
+    };
+
+    if (activeVersion === 'yours') {
+      setSlides((prev) => reorderArr(prev));
+    } else {
+      setSuggestedSlides((prev) => reorderArr(prev));
+    }
+
+    // Also reorder images so re-rendering works correctly
+    setImages((prev) => {
+      const next = [...prev];
+      [next[currentSlide], next[target]] = [next[target], next[currentSlide]];
+      return next.map((img, i) => ({ ...img, order: i }));
+    });
+
+    setCurrentSlide(target);
+  }, [currentSlide, activeSlides.length, activeVersion, pushUndo]);
 
   const canGenerate = images.length > 0 && text.trim().length > 0;
-  const slideChanged = editingText !== currentSlideText || editingQuote !== currentSlideIsQuote;
+  const slideChanged =
+    editingText !== currentSlideText ||
+    editingStyle.isQuote !== currentSlideStyle.isQuote ||
+    editingStyle.textPosition !== currentSlideStyle.textPosition ||
+    editingStyle.textColor !== currentSlideStyle.textColor ||
+    editingStyle.gradientIntensity !== currentSlideStyle.gradientIntensity ||
+    editingStyle.imageOffsetY !== currentSlideStyle.imageOffsetY;
 
   return (
     <>
@@ -285,38 +390,165 @@ export default function Home() {
               />
             )}
 
-            {/* Slide text editor */}
+            {/* Slide editor panel */}
             {activeSlides.length > 0 && (
-              <div className="max-w-[540px] mx-auto mt-4">
-                <label className="block text-xs font-medium text-secondary mb-1.5">
-                  Slide {currentSlide + 1} text
-                </label>
-                <textarea
-                  value={editingText}
-                  onChange={(e) => setEditingText(e.target.value)}
-                  placeholder="Add or edit text for this slide..."
-                  className={`w-full px-3 py-2 text-sm rounded-md border border-border bg-surface text-primary resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all duration-150 ${editingQuote ? 'italic font-serif' : ''}`}
-                  rows={3}
-                />
-                <div className="flex items-center gap-2 mt-2">
+              <div className="max-w-[540px] mx-auto mt-4 space-y-3">
+                {/* Reorder + Undo/Redo bar */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleMoveSlide(-1)}
+                      disabled={currentSlide === 0}
+                      className="p-1.5 rounded text-xs text-muted hover:text-primary hover:bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
+                      title="Move slide left"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                    <span className="text-xs font-medium text-secondary px-1">
+                      Slide {currentSlide + 1} of {activeSlides.length}
+                    </span>
+                    <button
+                      onClick={() => handleMoveSlide(1)}
+                      disabled={currentSlide === activeSlides.length - 1}
+                      className="p-1.5 rounded text-xs text-muted hover:text-primary hover:bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
+                      title="Move slide right"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={handleUndo}
+                      disabled={undoStack.current.length === 0}
+                      className="p-1.5 rounded text-xs text-muted hover:text-primary hover:bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
+                      title="Undo"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 7h6a3 3 0 0 1 0 6H8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 4L4 7l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                    <button
+                      onClick={handleRedo}
+                      disabled={redoStack.current.length === 0}
+                      className="p-1.5 rounded text-xs text-muted hover:text-primary hover:bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
+                      title="Redo"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M12 7H6a3 3 0 0 0 0 6h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M9 4l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Text editor */}
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1.5">
+                    Slide text
+                  </label>
+                  <textarea
+                    value={editingText}
+                    onChange={(e) => setEditingText(e.target.value)}
+                    placeholder="Add or edit text for this slide..."
+                    className={`w-full px-3 py-2 text-sm rounded-md border border-border bg-surface text-primary resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all duration-150 ${editingStyle.isQuote ? 'italic font-serif' : ''}`}
+                    rows={3}
+                  />
+                </div>
+
+                {/* Style controls */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Quote toggle */}
                   <button
                     type="button"
-                    onClick={() => setEditingQuote((q) => !q)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-all duration-150 ${
-                      editingQuote
+                    onClick={() => setEditingStyle((s) => ({ ...s, isQuote: !s.isQuote }))}
+                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-all duration-150 ${
+                      editingStyle.isQuote
                         ? 'border-primary bg-primary/10 text-primary'
                         : 'border-border text-muted hover:text-secondary hover:bg-hover'
                     }`}
                   >
                     <span className="font-serif italic text-sm leading-none">&ldquo;</span>
-                    Quote Style
+                    Quote
                   </button>
-                  {editingQuote && (
-                    <span className="text-xs text-muted">Italic serif — this slide only</span>
-                  )}
+
+                  {/* Text position */}
+                  <div className="flex rounded-md border border-border overflow-hidden">
+                    {(['top', 'middle', 'bottom'] as const).map((pos) => (
+                      <button
+                        key={pos}
+                        onClick={() => setEditingStyle((s) => ({ ...s, textPosition: pos }))}
+                        className={`flex-1 py-1.5 text-xs font-medium transition-all duration-150 ${
+                          editingStyle.textPosition === pos
+                            ? 'bg-primary text-white'
+                            : 'text-muted hover:text-secondary hover:bg-hover'
+                        }`}
+                      >
+                        {pos.charAt(0).toUpperCase() + pos.slice(1)}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
+                {/* Text color */}
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1.5">Text Color</label>
+                  <div className="flex items-center gap-2">
+                    {TEXT_COLORS.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => setEditingStyle((s) => ({ ...s, textColor: c.value }))}
+                        className={`w-7 h-7 rounded-full border-2 transition-all duration-150 ${
+                          editingStyle.textColor === c.value
+                            ? 'border-primary scale-110'
+                            : 'border-border hover:border-secondary'
+                        }`}
+                        style={{ backgroundColor: c.value }}
+                        title={c.label}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Gradient intensity */}
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1.5">Gradient</label>
+                  <div className="flex rounded-md border border-border overflow-hidden">
+                    {(['none', 'light', 'medium', 'heavy'] as const).map((g) => (
+                      <button
+                        key={g}
+                        onClick={() => setEditingStyle((s) => ({ ...s, gradientIntensity: g }))}
+                        className={`flex-1 py-1.5 text-xs font-medium transition-all duration-150 ${
+                          editingStyle.gradientIntensity === g
+                            ? 'bg-primary text-white'
+                            : 'text-muted hover:text-secondary hover:bg-hover'
+                        }`}
+                      >
+                        {g.charAt(0).toUpperCase() + g.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Image vertical position */}
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1.5">
+                    Image Position
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-muted">Top</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={editingStyle.imageOffsetY ?? 0.15}
+                      onChange={(e) =>
+                        setEditingStyle((s) => ({ ...s, imageOffsetY: parseFloat(e.target.value) }))
+                      }
+                      className="flex-1 h-1.5 accent-primary"
+                    />
+                    <span className="text-xs text-muted">Bottom</span>
+                  </div>
+                </div>
+
+                {/* Update button */}
                 {slideChanged && (
-                  <div className="flex justify-end mt-2">
+                  <div className="flex justify-end pt-1">
                     <button
                       onClick={handleUpdateSlideText}
                       disabled={updatingSlide}

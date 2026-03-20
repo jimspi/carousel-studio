@@ -5,12 +5,29 @@ export interface UploadedImage {
   order: number;
 }
 
+export type TextPosition = 'top' | 'middle' | 'bottom';
+export type GradientIntensity = 'none' | 'light' | 'medium' | 'heavy';
+
+export interface SlideStyle {
+  isQuote?: boolean;
+  textPosition?: TextPosition;
+  textColor?: string;
+  gradientIntensity?: GradientIntensity;
+  imageOffsetY?: number; // 0–1, vertical crop position
+}
+
 export interface ProcessedSlide {
   imageData: string;
   slideNumber: number;
   textContent: string;
-  isQuote?: boolean;
+  style: SlideStyle;
 }
+
+export const TEXT_COLORS = [
+  { id: 'white', label: 'White', value: '#FFFFFF' },
+  { id: 'black', label: 'Black', value: '#000000' },
+  { id: 'cream', label: 'Cream', value: '#FDF6E3' },
+] as const;
 
 export type AspectRatio = '1:1' | '4:5' | 'original';
 

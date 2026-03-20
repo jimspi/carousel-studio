@@ -9,6 +9,7 @@ export interface ProcessedSlide {
   imageData: string;
   slideNumber: number;
   textContent: string;
+  isQuote?: boolean;
 }
 
 export type AspectRatio = '1:1' | '4:5' | 'original';

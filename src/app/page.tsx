@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { UploadedImage, ProcessedSlide, AspectRatio, FONTS } from '@/types';
 import { distributeText } from '@/lib/distributeText';
 import { distributeSuggestedText } from '@/lib/distributeSuggestedText';
@@ -30,19 +30,32 @@ export default function Home() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [activeVersion, setActiveVersion] = useState<'yours' | 'suggested'>('yours');
   const [editingText, setEditingText] = useState('');
+  const [editingQuote, setEditingQuote] = useState(false);
   const [updatingSlide, setUpdatingSlide] = useState(false);
+
+  // Revoke blob URLs for old slides to free memory
+  const revokeSlideURLs = useCallback((oldSlides: ProcessedSlide[]) => {
+    oldSlides.forEach((s) => {
+      if (s.imageData.startsWith('blob:')) URL.revokeObjectURL(s.imageData);
+    });
+  }, []);
 
   // Derive active slides for the current version
   const activeSlides = activeVersion === 'yours' ? slides : suggestedSlides;
-  const currentSlideText = activeSlides[currentSlide]?.textContent ?? '';
+  const currentSlideData = activeSlides[currentSlide];
+  const currentSlideText = currentSlideData?.textContent ?? '';
+  const currentSlideIsQuote = currentSlideData?.isQuote ?? false;
 
-  // Sync editing text when navigating slides or switching versions
+  // Sync editing text and quote toggle when navigating slides or switching versions
   useEffect(() => {
     setEditingText(currentSlideText);
-  }, [currentSlideText]);
+    setEditingQuote(currentSlideIsQuote);
+  }, [currentSlideText, currentSlideIsQuote]);
 
   const clearAll = useCallback(() => {
     images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+    revokeSlideURLs(slides);
+    revokeSlideURLs(suggestedSlides);
     setImages([]);
     setText('');
     setSlides([]);
@@ -53,7 +66,8 @@ export default function Home() {
     setProgress(null);
     setProcessing(false);
     setEditingText('');
-  }, [images]);
+    setEditingQuote(false);
+  }, [images, slides, suggestedSlides, revokeSlideURLs]);
 
   const handleImagesAdded = useCallback((newImages: UploadedImage[]) => {
     setImages((prev) => [...prev, ...newImages]);
@@ -87,6 +101,8 @@ export default function Home() {
     const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
 
     setProcessing(true);
+    revokeSlideURLs(slides);
+    revokeSlideURLs(suggestedSlides);
     setSlides([]);
     setSuggestedSlides([]);
     setSuggestedTips([]);
@@ -133,7 +149,7 @@ export default function Home() {
       setProcessing(false);
       setProgress(null);
     }
-  }, [images, text, aspectRatio, fontId]);
+  }, [images, text, aspectRatio, fontId, slides, suggestedSlides, revokeSlideURLs]);
 
   const handleUseSuggested = useCallback(() => {
     if (suggestedSlides.length > 0) {
@@ -150,17 +166,20 @@ export default function Home() {
     const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
     setUpdatingSlide(true);
     try {
+      const oldImageData = activeSlides[currentSlide]?.imageData;
       const newImageData = await renderSlide(
         images[currentSlide].file,
         editingText,
         aspectRatio,
         font.family,
-        font.weight
+        font.weight,
+        editingQuote
       );
+      if (oldImageData?.startsWith('blob:')) URL.revokeObjectURL(oldImageData);
       const updater = (prev: ProcessedSlide[]) =>
         prev.map((s, i) =>
           i === currentSlide
-            ? { ...s, imageData: newImageData, textContent: editingText }
+            ? { ...s, imageData: newImageData, textContent: editingText, isQuote: editingQuote }
             : s
         );
       if (activeVersion === 'yours') {
@@ -171,10 +190,10 @@ export default function Home() {
     } finally {
       setUpdatingSlide(false);
     }
-  }, [currentSlide, editingText, images, aspectRatio, fontId, activeVersion]);
+  }, [currentSlide, editingText, editingQuote, images, aspectRatio, fontId, activeVersion, activeSlides]);
 
   const canGenerate = images.length > 0 && text.trim().length > 0;
-  const textChanged = editingText !== currentSlideText;
+  const slideChanged = editingText !== currentSlideText || editingQuote !== currentSlideIsQuote;
 
   return (
     <>
@@ -276,10 +295,27 @@ export default function Home() {
                   value={editingText}
                   onChange={(e) => setEditingText(e.target.value)}
                   placeholder="Add or edit text for this slide..."
-                  className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface text-primary resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all duration-150"
+                  className={`w-full px-3 py-2 text-sm rounded-md border border-border bg-surface text-primary resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all duration-150 ${editingQuote ? 'italic font-serif' : ''}`}
                   rows={3}
                 />
-                {textChanged && (
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingQuote((q) => !q)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-all duration-150 ${
+                      editingQuote
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border text-muted hover:text-secondary hover:bg-hover'
+                    }`}
+                  >
+                    <span className="font-serif italic text-sm leading-none">&ldquo;</span>
+                    Quote Style
+                  </button>
+                  {editingQuote && (
+                    <span className="text-xs text-muted">Italic serif — this slide only</span>
+                  )}
+                </div>
+                {slideChanged && (
                   <div className="flex justify-end mt-2">
                     <button
                       onClick={handleUpdateSlideText}
@@ -313,8 +349,8 @@ export default function Home() {
           </section>
         )}
 
-        {/* How It Works */}
-        <HowItWorks />
+        {/* How It Works — only shown before generating */}
+        {slides.length === 0 && <HowItWorks />}
       </main>
     </>
   );

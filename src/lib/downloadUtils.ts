@@ -1,25 +1,34 @@
 import JSZip from 'jszip';
 
-export function downloadSingleSlide(dataUrl: string, slideNumber: number) {
+// Convert any image URL (blob: or data:) to a Blob
+async function urlToBlob(url: string): Promise<Blob> {
+  const res = await fetch(url);
+  return res.blob();
+}
+
+export async function downloadSingleSlide(imageUrl: string, slideNumber: number) {
+  const blob = await urlToBlob(imageUrl);
+  const href = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = dataUrl;
+  link.href = href;
   link.download = `slide-${String(slideNumber).padStart(2, '0')}.png`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
 }
 
-export async function downloadAllSlides(dataUrls: string[]) {
+export async function downloadAllSlides(imageUrls: string[]) {
   const zip = new JSZip();
 
-  for (let i = 0; i < dataUrls.length; i++) {
-    const base64 = dataUrls[i].split(',')[1];
+  for (let i = 0; i < imageUrls.length; i++) {
+    const blob = await urlToBlob(imageUrls[i]);
     const filename = `slide-${String(i + 1).padStart(2, '0')}.png`;
-    zip.file(filename, base64, { base64: true });
+    zip.file(filename, blob);
   }
 
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(blob);
+  const zipBlob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(zipBlob);
   const link = document.createElement('a');
   link.href = url;
   link.download = 'carousel-studio-export.zip';
@@ -29,15 +38,9 @@ export async function downloadAllSlides(dataUrls: string[]) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function dataUrlToFile(dataUrl: string, filename: string): File {
-  const [header, base64] = dataUrl.split(',');
-  const mime = header.match(/:(.*?);/)?.[1] || 'image/png';
-  const bytes = atob(base64);
-  const arr = new Uint8Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) {
-    arr[i] = bytes.charCodeAt(i);
-  }
-  return new File([arr], filename, { type: mime });
+async function urlToFile(url: string, filename: string): Promise<File> {
+  const blob = await urlToBlob(url);
+  return new File([blob], filename, { type: blob.type || 'image/png' });
 }
 
 export function canShareFiles(): boolean {
@@ -46,8 +49,8 @@ export function canShareFiles(): boolean {
     !!navigator.canShare;
 }
 
-export async function shareToCamera(dataUrl: string, slideNumber: number): Promise<boolean> {
-  const file = dataUrlToFile(dataUrl, `slide-${String(slideNumber).padStart(2, '0')}.png`);
+export async function shareToCamera(imageUrl: string, slideNumber: number): Promise<boolean> {
+  const file = await urlToFile(imageUrl, `slide-${String(slideNumber).padStart(2, '0')}.png`);
   const shareData = { files: [file] };
 
   if (!navigator.canShare?.(shareData)) {
@@ -58,15 +61,16 @@ export async function shareToCamera(dataUrl: string, slideNumber: number): Promi
     await navigator.share(shareData);
     return true;
   } catch (err) {
-    // User cancelled the share sheet — not an error
     if ((err as DOMException).name === 'AbortError') return true;
     return false;
   }
 }
 
-export async function shareAllToCamera(dataUrls: string[]): Promise<boolean> {
-  const files = dataUrls.map((url, i) =>
-    dataUrlToFile(url, `slide-${String(i + 1).padStart(2, '0')}.png`)
+export async function shareAllToCamera(imageUrls: string[]): Promise<boolean> {
+  const files = await Promise.all(
+    imageUrls.map((url, i) =>
+      urlToFile(url, `slide-${String(i + 1).padStart(2, '0')}.png`)
+    )
   );
   const shareData = { files };
 

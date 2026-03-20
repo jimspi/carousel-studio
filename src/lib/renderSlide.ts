@@ -2,16 +2,37 @@ import { AspectRatio } from '@/types';
 import { wrapText, calculateFontSize } from './wrapText';
 
 // Yield to browser between heavy operations to prevent UI freeze
+// Uses requestAnimationFrame + setTimeout to guarantee the browser
+// actually paints a frame before we resume work on the main thread.
 function yieldToMain(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return new Promise((resolve) =>
+    requestAnimationFrame(() => setTimeout(resolve, 0))
+  );
 }
+
+// Async, non-blocking alternative to canvas.toDataURL()
+function canvasToObjectURL(canvas: HTMLCanvasElement): Promise<string> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(URL.createObjectURL(blob));
+        else reject(new Error('Canvas toBlob returned null'));
+      },
+      'image/png'
+    );
+  });
+}
+
+const QUOTE_FONT_FAMILY = '"Playfair Display", "Georgia", serif';
+const QUOTE_FONT_WEIGHT = 400;
 
 export async function renderSlide(
   imageFile: File,
   text: string,
   aspectRatio: AspectRatio,
   fontFamily: string = '"Helvetica Neue", "Arial", sans-serif',
-  fontWeight: number = 700
+  fontWeight: number = 700,
+  isQuote: boolean = false
 ): Promise<string> {
   const img = await loadImage(imageFile);
 
@@ -54,6 +75,10 @@ export async function renderSlide(
   ctx.fillRect(0, gradientStart, canvasWidth, canvasHeight - gradientStart);
 
   if (text.trim()) {
+    const usedFontFamily = isQuote ? QUOTE_FONT_FAMILY : fontFamily;
+    const usedFontWeight = isQuote ? QUOTE_FONT_WEIGHT : fontWeight;
+    const fontStyle = isQuote ? 'italic' : 'normal';
+
     const padding = 60 * scale;
     const bottomPadding = 80 * scale;
     const maxWidth = canvasWidth - padding * 2;
@@ -67,27 +92,37 @@ export async function renderSlide(
     ctx.textBaseline = 'top';
 
     const { lines, finalFontSize } = wrapText(
-      ctx, text, maxWidth, baseFontSize, maxLines, fontFamily, fontWeight
+      ctx, text, maxWidth, baseFontSize, maxLines, usedFontFamily, usedFontWeight, fontStyle
     );
     const lineHeight = finalFontSize * 1.4;
     const totalTextHeight = lines.length * lineHeight;
     const rawStartY = canvasHeight - bottomPadding - totalTextHeight;
     const startY = Math.max(rawStartY, gradientStart + 20);
 
-    ctx.font = `${fontWeight} ${finalFontSize}px ${fontFamily}`;
+    ctx.font = `${fontStyle} ${usedFontWeight} ${finalFontSize}px ${usedFontFamily}`;
     ctx.fillStyle = '#FFFFFF';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
+
+    // Draw opening quote mark for quote slides
+    if (isQuote) {
+      const quoteMarkSize = finalFontSize * 1.8;
+      ctx.font = `${usedFontWeight} ${quoteMarkSize}px ${usedFontFamily}`;
+      ctx.globalAlpha = 0.35;
+      ctx.fillText('\u201C', canvasWidth / 2, startY - quoteMarkSize * 0.75);
+      ctx.globalAlpha = 1;
+      ctx.font = `${fontStyle} ${usedFontWeight} ${finalFontSize}px ${usedFontFamily}`;
+    }
 
     for (let i = 0; i < lines.length; i++) {
       ctx.fillText(lines[i], canvasWidth / 2, startY + i * lineHeight);
     }
   }
 
-  // Yield after heavy canvas work before toDataURL
+  // Yield after heavy canvas work before export
   await yieldToMain();
 
-  return canvas.toDataURL('image/png');
+  return canvasToObjectURL(canvas);
 }
 
 function loadImage(file: File): Promise<HTMLImageElement> {
@@ -115,17 +150,18 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-function resizeImage(img: HTMLImageElement, maxDim: number): Promise<HTMLImageElement> {
+async function resizeImage(img: HTMLImageElement, maxDim: number): Promise<HTMLImageElement> {
+  const ratio = Math.min(maxDim / img.width, maxDim / img.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width * ratio;
+  canvas.height = img.height * ratio;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const url = await canvasToObjectURL(canvas);
   return new Promise((resolve) => {
-    const ratio = Math.min(maxDim / img.width, maxDim / img.height);
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width * ratio;
-    canvas.height = img.height * ratio;
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     const resized = new Image();
     resized.onload = () => resolve(resized);
-    resized.src = canvas.toDataURL();
+    resized.src = url;
   });
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { UploadedImage, ProcessedSlide, AspectRatio, SlideStyle, FONTS, TEXT_COLORS } from '@/types';
 import { distributeText } from '@/lib/distributeText';
 import { distributeSuggestedText } from '@/lib/distributeSuggestedText';
@@ -52,6 +52,11 @@ export default function Home() {
   const [editingText, setEditingText] = useState('');
   const [editingStyle, setEditingStyle] = useState<SlideStyle>({ ...DEFAULT_STYLE });
   const [updatingSlide, setUpdatingSlide] = useState(false);
+
+  // Live preview
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const previewTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const previewGenId = useRef(0); // to discard stale renders
 
   // Undo / redo history
   const undoStack = useRef<ProcessedSlide[][]>([]);
@@ -131,9 +136,11 @@ export default function Home() {
     setProcessing(false);
     setEditingText('');
     setEditingStyle({ ...DEFAULT_STYLE });
+    if (previewImage?.startsWith('blob:')) URL.revokeObjectURL(previewImage);
+    setPreviewImage(null);
     undoStack.current = [];
     redoStack.current = [];
-  }, [images, slides, suggestedSlides, revokeSlideURLs]);
+  }, [images, slides, suggestedSlides, revokeSlideURLs, previewImage]);
 
   const handleImagesAdded = useCallback((newImages: UploadedImage[]) => {
     setImages((prev) => [...prev, ...newImages]);
@@ -233,20 +240,29 @@ export default function Home() {
 
   const handleUpdateSlideText = useCallback(async () => {
     if (currentSlide >= images.length) return;
-    const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
     pushUndo();
     setUpdatingSlide(true);
     try {
+      // Reuse live preview image if available, otherwise render fresh
+      let newImageData: string;
+      if (previewImage) {
+        newImageData = previewImage;
+        setPreviewImage(null);
+      } else {
+        const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
+        newImageData = await renderSlide(
+          images[currentSlide].file,
+          editingText,
+          aspectRatio,
+          font.family,
+          font.weight,
+          editingStyle
+        );
+      }
       const oldImageData = activeSlides[currentSlide]?.imageData;
-      const newImageData = await renderSlide(
-        images[currentSlide].file,
-        editingText,
-        aspectRatio,
-        font.family,
-        font.weight,
-        editingStyle
-      );
-      if (oldImageData?.startsWith('blob:')) URL.revokeObjectURL(oldImageData);
+      if (oldImageData?.startsWith('blob:') && oldImageData !== newImageData) {
+        URL.revokeObjectURL(oldImageData);
+      }
       const updater = (prev: ProcessedSlide[]) =>
         prev.map((s, i) =>
           i === currentSlide
@@ -261,7 +277,7 @@ export default function Home() {
     } finally {
       setUpdatingSlide(false);
     }
-  }, [currentSlide, editingText, editingStyle, images, aspectRatio, fontId, activeVersion, activeSlides, pushUndo]);
+  }, [currentSlide, editingText, editingStyle, images, aspectRatio, fontId, activeVersion, activeSlides, pushUndo, previewImage]);
 
   // Reorder generated slides
   const handleMoveSlide = useCallback((direction: -1 | 1) => {
@@ -299,6 +315,55 @@ export default function Home() {
     editingStyle.textColor !== currentSlideStyle.textColor ||
     editingStyle.gradientIntensity !== currentSlideStyle.gradientIntensity ||
     editingStyle.imageOffsetY !== currentSlideStyle.imageOffsetY;
+
+  // Debounced live preview: re-render the current slide as user edits
+  useEffect(() => {
+    if (!slideChanged || currentSlide >= images.length || activeSlides.length === 0) {
+      setPreviewImage(null);
+      return;
+    }
+
+    clearTimeout(previewTimer.current);
+    const id = ++previewGenId.current;
+    previewTimer.current = setTimeout(async () => {
+      const font = FONTS.find((f) => f.id === fontId) ?? FONTS[0];
+      try {
+        const img = await renderSlide(
+          images[currentSlide].file,
+          editingText,
+          aspectRatio,
+          font.family,
+          font.weight,
+          editingStyle
+        );
+        // Only apply if this is still the latest request
+        if (previewGenId.current === id) {
+          setPreviewImage((prev) => {
+            if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
+            return img;
+          });
+        } else {
+          if (img.startsWith('blob:')) URL.revokeObjectURL(img);
+        }
+      } catch {
+        // Silently ignore preview render failures
+      }
+    }, 300);
+
+    return () => clearTimeout(previewTimer.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingText, editingStyle, currentSlide, slideChanged]);
+
+  // Build display slides: swap in preview image for the current slide
+  const displaySlides = useMemo(() => {
+    if (!previewImage || !slideChanged) return activeSlides;
+    return activeSlides.map((s, i) =>
+      i === currentSlide ? { ...s, imageData: previewImage } : s
+    );
+  }, [activeSlides, previewImage, currentSlide, slideChanged]);
+
+  const displayYours = activeVersion === 'yours' ? displaySlides : slides;
+  const displaySuggested = activeVersion === 'suggested' ? displaySlides : suggestedSlides;
 
   return (
     <>
@@ -375,7 +440,7 @@ export default function Home() {
             {/* Your Version */}
             {activeVersion === 'yours' && (
               <CarouselPreview
-                slides={slides}
+                slides={displayYours}
                 onSlideChange={setCurrentSlide}
               />
             )}
@@ -383,7 +448,7 @@ export default function Home() {
             {/* Suggested Version */}
             {activeVersion === 'suggested' && suggestedSlides.length > 0 && (
               <SuggestedPreview
-                slides={suggestedSlides}
+                slides={displaySuggested}
                 tips={suggestedTips}
                 onUseSuggested={handleUseSuggested}
                 onSlideChange={setCurrentSlide}
@@ -548,7 +613,10 @@ export default function Home() {
 
                 {/* Update button */}
                 {slideChanged && (
-                  <div className="flex justify-end pt-1">
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-xs text-muted italic">
+                      {previewImage ? 'Live preview' : 'Rendering preview...'}
+                    </span>
                     <button
                       onClick={handleUpdateSlideText}
                       disabled={updatingSlide}

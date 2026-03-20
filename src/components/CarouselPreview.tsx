@@ -14,11 +14,15 @@ export default function CarouselPreview({ slides, onSlideChange }: CarouselPrevi
   const touchStartX = useRef(0);
   const touchEndX = useRef(0);
 
-  // Reset current when slides change
+  // Reset current when a new set of slides is generated (length changes)
+  const prevLength = useRef(slides.length);
   useEffect(() => {
-    setCurrent(0);
-    onSlideChange?.(0);
-  }, [slides, onSlideChange]);
+    if (slides.length !== prevLength.current) {
+      prevLength.current = slides.length;
+      setCurrent(0);
+      onSlideChange?.(0);
+    }
+  }, [slides.length, onSlideChange]);
 
   const goTo = useCallback(
     (idx: number) => {

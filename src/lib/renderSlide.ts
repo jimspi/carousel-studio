@@ -174,7 +174,25 @@ export async function renderSlide(
       ctx, text, maxWidth, baseFontSize, maxLines, usedFontFamily, usedFontWeight, fontStyle
     );
     const lineHeight = finalFontSize * 1.4;
-    const totalTextHeight = lines.length * lineHeight;
+
+    // For quote slides, detect attribution lines (starting with - or —)
+    // and calculate their reduced height for accurate total
+    const attrFontSize = Math.round(finalFontSize * 0.65);
+    const attrLineHeight = attrFontSize * 1.4;
+    const attrGap = finalFontSize * 0.5; // extra gap before attribution
+
+    const isAttrLine = (line: string) =>
+      isQuote && /^\s*[-\u2014\u2013]\s*\S/.test(line);
+
+    // Calculate total height accounting for smaller attribution lines
+    let totalTextHeight = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (isAttrLine(lines[i])) {
+        totalTextHeight += (i > 0 ? attrGap : 0) + attrLineHeight;
+      } else {
+        totalTextHeight += lineHeight;
+      }
+    }
 
     let startY: number;
     if (textPosition === 'top') {
@@ -201,8 +219,25 @@ export async function renderSlide(
       ctx.font = `${fontStyle} ${usedFontWeight} ${finalFontSize}px ${usedFontFamily}`;
     }
 
+    let cursorY = startY;
     for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], canvasWidth / 2, startY + i * lineHeight);
+      if (isAttrLine(lines[i])) {
+        // Attribution: extra gap, smaller non-italic font, slightly transparent
+        cursorY += attrGap;
+        ctx.font = `normal ${usedFontWeight} ${attrFontSize}px ${usedFontFamily}`;
+        ctx.globalAlpha = 0.75;
+        ctx.fillText(lines[i], canvasWidth / 2, cursorY);
+        ctx.globalAlpha = 1;
+        cursorY += attrLineHeight;
+        // Restore quote font for any subsequent lines
+        ctx.font = `${fontStyle} ${usedFontWeight} ${finalFontSize}px ${usedFontFamily}`;
+      } else if (lines[i] === '') {
+        // Blank line (from explicit newline) — just add spacing
+        cursorY += lineHeight * 0.5;
+      } else {
+        ctx.fillText(lines[i], canvasWidth / 2, cursorY);
+        cursorY += lineHeight;
+      }
     }
   }
 

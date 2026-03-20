@@ -33,24 +33,36 @@ function computeLines(
   text: string,
   maxWidth: number
 ): string[] {
-  const words = text.split(/\s+/);
+  // Split by explicit newlines first, then word-wrap each paragraph
+  const paragraphs = text.split('\n');
   const lines: string[] = [];
-  let currentLine = '';
 
-  for (const word of words) {
-    const testLine = currentLine ? `${currentLine} ${word}` : word;
-    const metrics = ctx.measureText(testLine);
-
-    if (metrics.width > maxWidth && currentLine) {
-      lines.push(currentLine);
-      currentLine = word;
-    } else {
-      currentLine = testLine;
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (trimmed === '') {
+      // Preserve blank lines as empty entries
+      lines.push('');
+      continue;
     }
-  }
 
-  if (currentLine) {
-    lines.push(currentLine);
+    const words = trimmed.split(/\s+/);
+    let currentLine = '';
+
+    for (const word of words) {
+      const testLine = currentLine ? `${currentLine} ${word}` : word;
+      const metrics = ctx.measureText(testLine);
+
+      if (metrics.width > maxWidth && currentLine) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = testLine;
+      }
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
   }
 
   return lines;

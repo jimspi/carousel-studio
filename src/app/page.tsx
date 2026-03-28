@@ -60,6 +60,27 @@ export default function Home() {
     } catch {}
   }, []);
 
+  // Cleanup all blob URLs on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      slides.forEach((s) => { if (s.imageData.startsWith('blob:')) URL.revokeObjectURL(s.imageData); });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      suggestedSlides.forEach((s) => { if (s.imageData.startsWith('blob:')) URL.revokeObjectURL(s.imageData); });
+      // Flush undo/redo stacks
+      for (const stack of [undoStack.current, redoStack.current]) {
+        for (const entry of stack) {
+          entry.forEach((s) => { if (s.imageData.startsWith('blob:')) URL.revokeObjectURL(s.imageData); });
+        }
+      }
+      undoStack.current = [];
+      redoStack.current = [];
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Revoke blob URLs for old slides to free memory
   const revokeSlideURLs = useCallback((oldSlides: ProcessedSlide[]) => {
     oldSlides.forEach((s) => {
@@ -79,12 +100,27 @@ export default function Home() {
     setEditingStyle({ ...DEFAULT_STYLE, ...currentSlideStyle });
   }, [currentSlideText, currentSlideStyle]);
 
+  // Max undo/redo entries — keeps memory bounded on mobile
+  const MAX_UNDO = 5;
+
+  // Revoke blob URLs in a stack entry
+  const revokeStackEntry = useCallback((entry: ProcessedSlide[]) => {
+    entry.forEach((s) => { if (s.imageData.startsWith('blob:')) URL.revokeObjectURL(s.imageData); });
+  }, []);
+
   // Push current slides to undo stack before a change
   const pushUndo = useCallback(() => {
     const target = activeVersion === 'yours' ? slides : suggestedSlides;
     undoStack.current.push([...target]);
+    // Drop oldest entries beyond the cap
+    while (undoStack.current.length > MAX_UNDO) {
+      const dropped = undoStack.current.shift();
+      if (dropped) revokeStackEntry(dropped);
+    }
+    // Clear redo stack and free its memory
+    for (const entry of redoStack.current) revokeStackEntry(entry);
     redoStack.current = [];
-  }, [slides, suggestedSlides, activeVersion]);
+  }, [slides, suggestedSlides, activeVersion, revokeStackEntry]);
 
   const handleUndo = useCallback(() => {
     const prev = undoStack.current.pop();
@@ -108,6 +144,10 @@ export default function Home() {
     images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
     revokeSlideURLs(slides);
     revokeSlideURLs(suggestedSlides);
+    // Flush undo/redo blob URLs
+    for (const stack of [undoStack.current, redoStack.current]) {
+      for (const entry of stack) revokeStackEntry(entry);
+    }
     setImages([]);
     setText('');
     setSlides([]);
@@ -123,7 +163,7 @@ export default function Home() {
     setPreviewImage(null);
     undoStack.current = [];
     redoStack.current = [];
-  }, [images, slides, suggestedSlides, revokeSlideURLs, previewImage]);
+  }, [images, slides, suggestedSlides, revokeSlideURLs, revokeStackEntry, previewImage]);
 
   const handleImagesAdded = useCallback((newImages: UploadedImage[]) => {
     setImages((prev) => [...prev, ...newImages]);
@@ -159,6 +199,10 @@ export default function Home() {
     setProcessing(true);
     revokeSlideURLs(slides);
     revokeSlideURLs(suggestedSlides);
+    // Flush undo/redo blob URLs before regenerating
+    for (const stack of [undoStack.current, redoStack.current]) {
+      for (const entry of stack) revokeStackEntry(entry);
+    }
     setSlides([]);
     setSuggestedSlides([]);
     setSuggestedTips([]);
@@ -209,7 +253,7 @@ export default function Home() {
       setProcessing(false);
       setProgress(null);
     }
-  }, [images, text, aspectRatio, fontId, slides, suggestedSlides, revokeSlideURLs]);
+  }, [images, text, aspectRatio, fontId, slides, suggestedSlides, revokeSlideURLs, revokeStackEntry]);
 
   const handleUseSuggested = useCallback(() => {
     if (suggestedSlides.length > 0) {

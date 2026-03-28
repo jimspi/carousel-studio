@@ -1,18 +1,30 @@
 import { AspectRatio, SlideStyle } from '@/types';
 import { wrapText, calculateFontSize } from './wrapText';
 
-// Yield to browser between heavy operations to prevent UI freeze
+// Detect mobile device for adaptive rendering
+function isMobile(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+}
+
+// Yield to browser between heavy operations to prevent UI freeze.
+// On mobile, yield longer to allow GC to reclaim canvas memory.
 function yieldToMain(): Promise<void> {
   return new Promise((resolve) =>
-    requestAnimationFrame(() => setTimeout(resolve, 0))
+    requestAnimationFrame(() => setTimeout(resolve, isMobile() ? 50 : 0))
   );
 }
 
-// Async, non-blocking alternative to canvas.toDataURL()
+// Async, non-blocking alternative to canvas.toDataURL().
+// Clears the canvas after extracting the blob to immediately free GPU/RAM.
 function canvasToObjectURL(canvas: HTMLCanvasElement): Promise<string> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
+        // Release canvas memory immediately
+        canvas.width = 0;
+        canvas.height = 0;
         if (blob) resolve(URL.createObjectURL(blob));
         else reject(new Error('Canvas toBlob returned null'));
       },
@@ -83,10 +95,12 @@ export async function renderSlide(
     imageOffsetY,
   } = style;
 
-  const img = await loadImage(imageFile);
+  const mobile = isMobile();
+  const img = await loadImage(imageFile, mobile);
   await yieldToMain();
 
-  const scale = 2;
+  // Use 1x on mobile to cut canvas memory by 75% (18MB → 4.5MB per canvas)
+  const scale = mobile ? 1 : 2;
   const baseWidth = 1080;
 
   let canvasWidth: number;
@@ -245,15 +259,17 @@ export async function renderSlide(
   return canvasToObjectURL(canvas);
 }
 
-function loadImage(file: File): Promise<HTMLImageElement> {
+function loadImage(file: File, mobile: boolean = false): Promise<HTMLImageElement> {
+  // Mobile: cap at 2000px to reduce memory. Desktop: 4000px.
+  const maxDim = mobile ? 2000 : 4000;
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = async () => {
       URL.revokeObjectURL(url);
-      if (img.width > 4000 || img.height > 4000) {
+      if (img.width > maxDim || img.height > maxDim) {
         try {
-          const resized = await resizeImage(img, 4000);
+          const resized = await resizeImage(img, maxDim);
           resolve(resized);
         } catch (err) {
           reject(err);
@@ -277,10 +293,15 @@ async function resizeImage(img: HTMLImageElement, maxDim: number): Promise<HTMLI
   canvas.height = img.height * ratio;
   const ctx = canvas.getContext('2d')!;
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  // canvasToObjectURL already zeroes the canvas to free memory
   const url = await canvasToObjectURL(canvas);
   return new Promise((resolve) => {
     const resized = new Image();
-    resized.onload = () => resolve(resized);
+    resized.onload = () => {
+      // Revoke the temporary blob URL now that the image is loaded
+      URL.revokeObjectURL(url);
+      resolve(resized);
+    };
     resized.src = url;
   });
 }
